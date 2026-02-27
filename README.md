@@ -5,7 +5,7 @@ Rust project boilerplate with `tracing`, `anyhow`, and version bumping.
 ## Quick Start
 
 ```bash
-gh repo create my-project --template nicolaslazaro/rustplate --clone --private
+gh repo create my-project --template CooperBigFoot/rustplate --clone --private
 cd my-project
 bash init.sh my-project
 ```
