@@ -19,7 +19,7 @@ if [[ "$BUMP" != "patch" && "$BUMP" != "minor" && "$BUMP" != "major" ]]; then
     usage
 fi
 
-# Read current version from Cargo.toml
+# Read current version from workspace Cargo.toml
 CURRENT_VERSION="$(grep '^version' "$CARGO_TOML" | head -1 | sed 's/version = "\(.*\)"/\1/')"
 
 # Parse into components

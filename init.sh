@@ -13,8 +13,10 @@ PACKAGE_NAME="${PROJECT_NAME//_/-}"
 
 echo "Initializing project: $PACKAGE_NAME"
 
-# Update Cargo.toml
-sed -i '' "s/name = \"myproject\"/name = \"$PACKAGE_NAME\"/" Cargo.toml
+# Update all Cargo.toml files (package names use hyphens)
+for f in crates/*/Cargo.toml; do
+    sed -i '' "s/myproject/$PACKAGE_NAME/g" "$f"
+done
 
 # Update CLAUDE.md project overview
 sed -i '' "s/DESCRIBE THE PROJECT BRIEFLY/$PACKAGE_NAME/" CLAUDE.md
@@ -28,4 +30,4 @@ EOF
 rm -- "$0"
 
 echo "Done! Project '$PACKAGE_NAME' is ready."
-echo "Run 'cargo build' to verify."
+echo "Run 'cargo check' to verify."

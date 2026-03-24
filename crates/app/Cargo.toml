@@ -1,0 +1,10 @@
+[package]
+name = "myproject"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+myproject-core = { path = "../core" }
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
