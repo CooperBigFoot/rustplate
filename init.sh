@@ -13,7 +13,8 @@ PACKAGE_NAME="${PROJECT_NAME//_/-}"
 
 echo "Initializing project: $PACKAGE_NAME"
 
-# Update all Cargo.toml files (package names use hyphens)
+# Update Cargo.toml files
+sed -i '' "s/myproject/$PACKAGE_NAME/g" Cargo.toml
 for f in crates/*/Cargo.toml; do
     sed -i '' "s/myproject/$PACKAGE_NAME/g" "$f"
 done
