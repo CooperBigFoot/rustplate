@@ -1,6 +1,14 @@
 [workspace]
 members = ["crates/*"]
 
+# Denied only in library crates: each crates/* manifest opts in via `[lints] workspace = true`.
+# The root binary crate deliberately does not inherit these (`.expect("reason")` allowed in main.rs).
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+print_stdout = "deny"
+print_stderr = "deny"
+
 [package]
 name = "myproject"
 version = "0.1.4"
