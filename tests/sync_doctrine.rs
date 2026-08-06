@@ -18,6 +18,9 @@ const MALFORMED: &str =
     "<!-- BEGIN SYNCED DOCTRINE; source-sha256=nope -->\nbody\n<!-- END SYNCED DOCTRINE -->\n";
 const DUPLICATE: &str = "<!-- BEGIN SYNCED DOCTRINE; source-sha256=59e37fd6b3dbab27530822e6956da51bb7ae76b637e3638530f99a8b4db9038d -->\nbody\n<!-- BEGIN SYNCED DOCTRINE; source-sha256=59e37fd6b3dbab27530822e6956da51bb7ae76b637e3638530f99a8b4db9038d -->\nbody\n<!-- END SYNCED DOCTRINE -->\n";
 const REVERSED: &str = "<!-- END SYNCED DOCTRINE -->\n<!-- BEGIN SYNCED DOCTRINE; source-sha256=59e37fd6b3dbab27530822e6956da51bb7ae76b637e3638530f99a8b4db9038d -->\nbody\n";
+const UNSTAMPED: &str = "# Project Instructions\n\n## 2. Design Doctrine\n\nFour rules. This markerless fixture carries no source stamp.\n";
+const PARTIAL_BEGIN: &str = "# Project Instructions\n\n<!-- BEGIN SYNCED DOCTRINE; source-sha256=59e37fd6b3dbab27530822e6956da51bb7ae76b637e3638530f99a8b4db9038d -->\nbody\n";
+const PARTIAL_END: &str = "# Project Instructions\n\nbody\n<!-- END SYNCED DOCTRINE -->\n";
 
 static SERIAL: AtomicU64 = AtomicU64::new(0);
 
@@ -60,6 +63,41 @@ fn invoke(tree: &TemporaryTree, target: &Path) -> Output {
         .output()
         .expect("sync command must run");
     assert!(!tree.path.join("empty-home").exists());
+    output
+}
+
+fn invoke_check_without_writes(tree: &TemporaryTree, target: &Path) -> Output {
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("AGENTS.md");
+    let source_before = fs::read(&source).expect("source bytes must be readable");
+    let target_before = fs::read(target).expect("target bytes must be readable");
+    let modified_before = fs::metadata(target)
+        .expect("target metadata must be readable")
+        .modified()
+        .expect("target modification time must be readable");
+    assert!(!tree.path.join("empty-home").exists());
+    let output = Command::new(env!("CARGO_BIN_EXE_sync_doctrine"))
+        .env_clear()
+        .env("HOME", tree.path.join("empty-home"))
+        .arg("--check")
+        .arg(target)
+        .output()
+        .expect("check command must run");
+    assert!(!tree.path.join("empty-home").exists());
+    assert_eq!(
+        fs::read(&source).expect("source bytes must remain readable"),
+        source_before
+    );
+    assert_eq!(
+        fs::read(target).expect("target bytes must remain readable"),
+        target_before
+    );
+    assert_eq!(
+        fs::metadata(target)
+            .expect("target metadata must remain readable")
+            .modified()
+            .expect("target modification time must remain readable"),
+        modified_before
+    );
     output
 }
 
@@ -227,6 +265,174 @@ fn refuses_a_nonexistent_target_without_creating_it() {
         )
     );
     assert!(!target.exists());
+}
+
+#[test]
+fn check_classifies_current_without_writing() {
+    let tree = TemporaryTree::new("check-current");
+    let target = tree.path.join("AGENTS.md");
+    fs::write(&target, UPDATED_TARGET).expect("current fixture must be written");
+
+    let output = invoke_check_without_writes(&tree, &target);
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stderr.is_empty());
+    assert_eq!(
+        stdout(&output),
+        format!(
+            "CURRENT: {}: installed source-sha256={SOURCE_STAMP}, available source-sha256={SOURCE_STAMP}\n",
+            target.display()
+        )
+    );
+}
+
+#[test]
+fn check_classifies_stale_and_names_stamp_gap_without_writing() {
+    let tree = TemporaryTree::new("check-stale");
+    let target = tree.path.join("AGENTS.md");
+    fs::write(&target, STALE_TARGET).expect("stale fixture must be written");
+
+    let output = invoke_check_without_writes(&tree, &target);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stderr.is_empty());
+    assert_eq!(
+        stdout(&output),
+        format!(
+            "STALE: {}: installed source-sha256={STALE_STAMP}, available source-sha256={SOURCE_STAMP}\n",
+            target.display()
+        )
+    );
+}
+
+#[test]
+fn check_classifies_local_edit_and_names_all_stamps_without_writing() {
+    let tree = TemporaryTree::new("check-locally-edited");
+    let target = tree.path.join("AGENTS.md");
+    fs::write(&target, EDITED_TARGET).expect("edited fixture must be written");
+
+    let output = invoke_check_without_writes(&tree, &target);
+    assert_eq!(output.status.code(), Some(3));
+    assert!(output.stderr.is_empty());
+    assert_eq!(
+        stdout(&output),
+        format!(
+            "LOCALLY_EDITED: {}: marker source-sha256={STALE_STAMP}, content source-sha256={EDITED_STAMP}, available source-sha256={SOURCE_STAMP}\n",
+            target.display()
+        )
+    );
+}
+
+#[test]
+fn check_classifies_unstamped_offline_with_empty_home_without_writing() {
+    let tree = TemporaryTree::new("check-unstamped");
+    let target = tree.path.join("metis/AGENTS.md");
+    fs::create_dir(tree.path.join("metis")).expect("target parent must be created");
+    fs::write(&target, UNSTAMPED).expect("unstamped fixture must be written");
+
+    let output = invoke_check_without_writes(&tree, &target);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stderr.is_empty());
+    assert_eq!(
+        stdout(&output),
+        format!(
+            "UNSTAMPED: {}: target carries no source stamp; available source-sha256={SOURCE_STAMP}\n",
+            target.display()
+        )
+    );
+    assert!(!stdout(&output).contains("installed source-sha256="));
+}
+
+fn assert_check_malformed(case: &str, contents: &str) {
+    let tree = TemporaryTree::new(case);
+    let target = tree.path.join("AGENTS.md");
+    fs::write(&target, contents).expect("partial marker fixture must be written");
+
+    let output = invoke_check_without_writes(&tree, &target);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    assert_eq!(
+        stderr(&output),
+        format!(
+            "ERROR: {}: expected exactly one well-formed synced doctrine block; no changes written\n",
+            target.display()
+        )
+    );
+}
+
+#[test]
+fn check_rejects_partial_begin_marker_without_writing() {
+    assert_check_malformed("check-partial-begin", PARTIAL_BEGIN);
+}
+
+#[test]
+fn check_rejects_partial_end_marker_without_writing() {
+    assert_check_malformed("check-partial-end", PARTIAL_END);
+}
+
+#[test]
+fn check_refuses_a_nonexistent_target_without_creating_it() {
+    let tree = TemporaryTree::new("check-nonexistent");
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("AGENTS.md");
+    let target = tree.path.join("AGENTS.md");
+    let source_before = fs::read(&source).expect("source bytes must be readable");
+    assert!(!tree.path.join("empty-home").exists());
+
+    let output = Command::new(env!("CARGO_BIN_EXE_sync_doctrine"))
+        .env_clear()
+        .env("HOME", tree.path.join("empty-home"))
+        .arg("--check")
+        .arg(&target)
+        .output()
+        .expect("check command must run");
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    assert_eq!(
+        stderr(&output),
+        format!(
+            "ERROR: {}: instruction file does not exist; no changes written\n",
+            target.display()
+        )
+    );
+    assert_eq!(
+        fs::read(&source).expect("source bytes must remain readable"),
+        source_before
+    );
+    assert!(!target.exists());
+    assert!(!tree.path.join("empty-home").exists());
+}
+
+#[test]
+fn check_rejects_extra_arguments_with_exact_usage() {
+    let tree = TemporaryTree::new("check-usage");
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("AGENTS.md");
+    let target = tree.path.join("AGENTS.md");
+    fs::write(&target, UPDATED_TARGET).expect("current fixture must be written");
+    let source_before = fs::read(&source).expect("source bytes must be readable");
+    let target_before = fs::read(&target).expect("target bytes must be readable");
+    assert!(!tree.path.join("empty-home").exists());
+
+    let output = Command::new(env!("CARGO_BIN_EXE_sync_doctrine"))
+        .env_clear()
+        .env("HOME", tree.path.join("empty-home"))
+        .arg("--check")
+        .arg(&target)
+        .arg("extra")
+        .output()
+        .expect("check command must run");
+    assert_eq!(output.status.code(), Some(64));
+    assert!(output.stdout.is_empty());
+    assert_eq!(
+        stderr(&output),
+        "Usage: sync_doctrine [--check] [AGENTS.md]\n"
+    );
+    assert_eq!(
+        fs::read(&source).expect("source bytes must remain readable"),
+        source_before
+    );
+    assert_eq!(
+        fs::read(&target).expect("target bytes must remain readable"),
+        target_before
+    );
+    assert!(!tree.path.join("empty-home").exists());
 }
 
 #[test]

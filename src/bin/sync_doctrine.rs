@@ -1,6 +1,7 @@
-//! Synchronize a content-stamped doctrine block without overwriting local edits.
+//! Synchronize or classify a content-stamped doctrine block without overwriting local edits.
 //!
 //! `sync_doctrine : StampedDoctrine × InstructionFile → SyncOutcome`
+//! `check_doctrine : StampedDoctrine × InstructionFile → DoctrineStatus`
 
 use std::env;
 use std::fmt;
@@ -12,7 +13,7 @@ use std::process::ExitCode;
 const BEGIN_TOKEN: &str = "<!-- BEGIN SYNCED DOCTRINE;";
 const BEGIN_PREFIX: &str = "<!-- BEGIN SYNCED DOCTRINE; source-sha256=";
 const END_MARKER: &str = "<!-- END SYNCED DOCTRINE -->";
-const USAGE: &str = "Usage: sync_doctrine [AGENTS.md]";
+const USAGE: &str = "Usage: sync_doctrine [--check] [AGENTS.md]";
 
 #[derive(Debug, Eq, PartialEq)]
 enum SyncOutcome {
@@ -27,6 +28,25 @@ impl fmt::Display for SyncOutcome {
             Self::Unchanged => formatter.write_str("UNCHANGED"),
         }
     }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+enum DoctrineStatus {
+    Current {
+        source_stamp: String,
+    },
+    Stale {
+        installed_source_stamp: String,
+        available_source_stamp: String,
+    },
+    LocallyEdited {
+        marker_source_stamp: String,
+        content_source_stamp: String,
+        available_source_stamp: String,
+    },
+    Unstamped {
+        available_source_stamp: String,
+    },
 }
 
 #[derive(Debug)]
@@ -191,6 +211,91 @@ fn synchronize(source_path: &Path, target_path: &Path) -> Result<(SyncOutcome, S
     Ok((SyncOutcome::Updated, source_stamp))
 }
 
+fn check_doctrine(source_path: &Path, target_path: &Path) -> Result<DoctrineStatus, SyncError> {
+    let source_text = read_instruction(source_path)?;
+    let (_, source_stamp) = verified_block(&source_text, source_path)?;
+
+    let target_text = read_instruction(target_path)?;
+    if !target_text.contains(BEGIN_TOKEN) && !target_text.contains(END_MARKER) {
+        return Ok(DoctrineStatus::Unstamped {
+            available_source_stamp: source_stamp,
+        });
+    }
+
+    let target = parse_block(&target_text, target_path)?;
+    let actual_stamp = sha256_hex(target.body.as_bytes());
+    if actual_stamp != target.marker_stamp {
+        return Ok(DoctrineStatus::LocallyEdited {
+            marker_source_stamp: target.marker_stamp.to_owned(),
+            content_source_stamp: actual_stamp,
+            available_source_stamp: source_stamp,
+        });
+    }
+    if target.marker_stamp == source_stamp {
+        return Ok(DoctrineStatus::Current { source_stamp });
+    }
+    Ok(DoctrineStatus::Stale {
+        installed_source_stamp: target.marker_stamp.to_owned(),
+        available_source_stamp: source_stamp,
+    })
+}
+
+fn print_check_result(status: DoctrineStatus, target_path: &Path) -> Result<(), ExitCode> {
+    match status {
+        DoctrineStatus::Current { source_stamp } => {
+            println!(
+                "CURRENT: {}: installed source-sha256={source_stamp}, available source-sha256={source_stamp}",
+                target_path.display()
+            );
+            Ok(())
+        }
+        DoctrineStatus::Stale {
+            installed_source_stamp,
+            available_source_stamp,
+        } => {
+            println!(
+                "STALE: {}: installed source-sha256={installed_source_stamp}, available source-sha256={available_source_stamp}",
+                target_path.display()
+            );
+            Err(ExitCode::from(1))
+        }
+        DoctrineStatus::LocallyEdited {
+            marker_source_stamp,
+            content_source_stamp,
+            available_source_stamp,
+        } => {
+            println!(
+                "LOCALLY_EDITED: {}: marker source-sha256={marker_source_stamp}, content source-sha256={content_source_stamp}, available source-sha256={available_source_stamp}",
+                target_path.display()
+            );
+            Err(ExitCode::from(3))
+        }
+        DoctrineStatus::Unstamped {
+            available_source_stamp,
+        } => {
+            println!(
+                "UNSTAMPED: {}: target carries no source stamp; available source-sha256={available_source_stamp}",
+                target_path.display()
+            );
+            Err(ExitCode::from(1))
+        }
+    }
+}
+
+fn print_error(error: SyncError) -> Result<(), ExitCode> {
+    match error {
+        error @ SyncError::Conflict { .. } => {
+            eprintln!("CONFLICT: {error}; no changes written");
+            Err(ExitCode::from(3))
+        }
+        error
+        @ (SyncError::Missing { .. } | SyncError::Malformed { .. } | SyncError::Io { .. }) => {
+            eprintln!("ERROR: {error}; no changes written");
+            Err(ExitCode::from(2))
+        }
+    }
+}
+
 fn sha256_hex(input: &[u8]) -> String {
     const INITIAL_STATE: [u32; 8] = [
         0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
@@ -279,7 +384,13 @@ fn sha256_hex(input: &[u8]) -> String {
 }
 
 fn run() -> Result<(), ExitCode> {
-    let mut arguments = env::args_os().skip(1);
+    let mut arguments = env::args_os().skip(1).peekable();
+    let check_only = arguments
+        .peek()
+        .is_some_and(|argument| argument == "--check");
+    if check_only {
+        arguments.next();
+    }
     let target_path = arguments
         .next()
         .map(PathBuf::from)
@@ -290,6 +401,12 @@ fn run() -> Result<(), ExitCode> {
     }
 
     let source_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("AGENTS.md");
+    if check_only {
+        return match check_doctrine(&source_path, &target_path) {
+            Ok(status) => print_check_result(status, &target_path),
+            Err(error) => print_error(error),
+        };
+    }
     match synchronize(&source_path, &target_path) {
         Ok((outcome, source_stamp)) => {
             println!(
@@ -298,18 +415,7 @@ fn run() -> Result<(), ExitCode> {
             );
             Ok(())
         }
-        Err(error @ SyncError::Conflict { .. }) => {
-            eprintln!("CONFLICT: {error}; no changes written");
-            Err(ExitCode::from(3))
-        }
-        Err(error @ (SyncError::Missing { .. } | SyncError::Malformed { .. })) => {
-            eprintln!("ERROR: {error}; no changes written");
-            Err(ExitCode::from(2))
-        }
-        Err(error @ SyncError::Io { .. }) => {
-            eprintln!("ERROR: {error}; no changes written");
-            Err(ExitCode::from(2))
-        }
+        Err(error) => print_error(error),
     }
 }
 
