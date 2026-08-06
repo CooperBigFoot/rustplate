@@ -19,8 +19,8 @@ for f in crates/*/Cargo.toml; do
     sed -i '' "s/myproject/$PACKAGE_NAME/g" "$f"
 done
 
-# Update CLAUDE.md project overview
-sed -i '' "s/DESCRIBE THE PROJECT BRIEFLY/$PACKAGE_NAME/" CLAUDE.md
+# Update AGENTS.md project overview
+sed -i '' "s/DESCRIBE THE PROJECT BRIEFLY/$PACKAGE_NAME/" AGENTS.md
 
 # Reset README
 cat > README.md << EOF
