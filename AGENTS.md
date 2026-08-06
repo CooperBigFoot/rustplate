@@ -21,7 +21,14 @@ Clippy denies `.unwrap()`, `.expect()`, and `println!`/`eprintln!` in library cr
 
 ## 2. Design Doctrine
 
+<!-- BEGIN SYNCED DOCTRINE; source-sha256=59e37fd6b3dbab27530822e6956da51bb7ae76b637e3638530f99a8b4db9038d -->
 Four rules. They are one design stance seen four ways: a module means one thing, receives exactly what it needs, in types that cannot lie, and dies rather than guess.
+
+1. **A module means one thing.**
+2. **It receives exactly what it needs.**
+3. **Its types cannot lie.**
+4. **It dies rather than guess.**
+<!-- END SYNCED DOCTRINE -->
 
 ### 2.1 Denotation line
 
