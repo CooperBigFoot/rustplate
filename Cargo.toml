@@ -19,3 +19,8 @@ myproject-core = { path = "crates/core" }
 anyhow = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[profile.dev]
+# Reduce debug-information disk usage while retaining file and line information for backtraces.
+debug = "line-tables-only"
+incremental = true
